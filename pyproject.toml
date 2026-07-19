@@ -1,0 +1,36 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "deepseek-search"
+version = "0.1.0"
+description = "Strip DeepSeek's web search out of the model — pure search results, no AI summary, near-zero cost."
+readme = "README.md"
+license = "MIT"
+requires-python = ">=3.10"
+authors = [
+    { name = "不要葱姜蒜" },
+]
+keywords = ["deepseek", "web-search", "cli"]
+classifiers = [
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+]
+
+dependencies = [
+    "httpx>=0.27.0",
+]
+
+[project.scripts]
+deepseek-search = "deepseek_search.cli:main"
+
+[project.urls]
+Repository = "https://github.com/KMnO4-zx/deepseek-search"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/deepseek_search"]
