@@ -48,6 +48,20 @@ uv sync
 git pull && uv sync
 ```
 
+## Agent Skill
+
+如果希望 Claude Code、Codex 等 Agent 正确安装、调用、集成或调试 `deepseek-search`，可以安装仓库内置的 Skill：
+
+```bash
+npx skills add KMnO4-zx/deepseek-search -g -y
+```
+
+后续更新：
+
+```bash
+npx skills update deepseek-search -g -y
+```
+
 ## 快速开始
 
 ```bash
