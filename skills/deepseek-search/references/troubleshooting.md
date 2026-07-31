@@ -60,9 +60,12 @@
 
 这是提前断流的预期结果之一：客户端通常在最终 `message_delta` 前退出。把 `usage` 当作部分观测，不要据此断言服务端最终账单。需要计费结论时查看 DeepSeek 平台账单或在明确授权下做受控 benchmark。
 
+使用 `--summary` / `summarize=True` 时客户端会读取到响应结束，通常能拿到最终 output token；如果 `summary` 仍为空，检查搜索结果之后是否出现 `text` block 和 `text_delta`。
+
 ## CLI 与 Python 行为不同
 
 - CLI 默认使用强制搜索，没有暴露 `force_search` 开关。
+- CLI 默认不总结；`--summary` 会继续读取模型文本并产生输出 token。
 - CLI 会捕获异常、输出到 stderr 并以状态码 1 退出；Python API 直接抛异常。
 - CLI `status` 只读取配置文件；Python `resolve_api_key()` 还会检查显式参数和环境变量。
 - CLI JSON 是 dataclass 字段的序列化视图，不包含模型总结文本。

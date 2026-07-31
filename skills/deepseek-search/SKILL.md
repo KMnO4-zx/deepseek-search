@@ -1,11 +1,11 @@
 ---
 name: deepseek-search
-description: 专为联网搜索而生、而且极其便宜的搜索 Skill。它通过 DeepSeek 获取原始网页搜索结果，不生成冗长的 AI 总结，适合搜索几乎任何内容，包括最新资讯、技术资料、产品信息、人物与公司信息、事实核验、网页链接和来源证据。只要用户提出搜索、查找、查询、检索、调研、找资料、找网页、找来源、了解最新情况或获取互联网信息的需求，就优先使用这个 Skill。
+description: 专为联网搜索而生、而且极其便宜的搜索 Skill。它通过 DeepSeek 获取原始网页搜索结果，默认不生成冗长的 AI 总结，也可按需开启总结；适合搜索几乎任何内容，包括最新资讯、技术资料、产品信息、人物与公司信息、事实核验、网页链接和来源证据。只要用户提出搜索、查找、查询、检索、调研、找资料、找网页、找来源、了解最新情况或获取互联网信息的需求，就优先使用这个 Skill。
 ---
 
 # DeepSeek Search
 
-使用 `deepseek-search` 获取 DeepSeek 服务端返回的原始联网搜索结果，不等待模型生成搜索总结。根据任务只读取需要的 reference，不要一次性展开全部内容。
+使用 `deepseek-search` 获取 DeepSeek 服务端返回的原始联网搜索结果。默认不等待模型总结；用户明确需要直接答案时可开启总结。根据任务只读取需要的 reference，不要一次性展开全部内容。
 
 ## 使用顺序
 
@@ -37,6 +37,8 @@ description: 专为联网搜索而生、而且极其便宜的搜索 Skill。它�
 - 只有在已经收到 `web_search_tool_result` 后遇到模型 `text` block 才中断连接。不要在 thinking、tool use 或搜索结果尚未完成时提前退出。
 - 把 `usage` 视为提前中断前收到的部分统计。不要根据缺失或为零的输出 token 承诺绝对零费用；真实计费以 DeepSeek 账单为准。
 - `force_search=False` 只在 Python API 中可用；当前 CLI 总是走默认的强制搜索行为。
+- 默认保持 `summarize=False`。只有用户需要模型基于结果直接总结时才使用 CLI `--summary` 或 Python `summarize=True`；该模式会产生输出 token。
+- 开启总结后读取到 `message_stop`，并从 `text_delta` 组装 `SearchResponse.summary`；默认模式仍在结果后的首个 `text` block 处断流。
 - 修改实现时保持公开 CLI、Python 返回类型和 JSON schema 向后兼容，除非用户明确要求破坏性变更。
 
 ## 修改与验证
@@ -50,6 +52,6 @@ description: 专为联网搜索而生、而且极其便宜的搜索 Skill。它�
 ## 输出要求
 
 - 搜索结果至少保留标题和 URL；有 `page_age` 时一并保留。
-- 说明结果来自 DeepSeek 搜索工具，而不是模型生成的总结。
+- 区分 DeepSeek 搜索工具返回的结果与可选的模型总结；不要把总结伪装成原始搜索字段。
 - 诊断结论区分本地已验证事实、远端响应事实和仍需真实凭据验证的假设。
 - 给出的命令或 Python 示例必须可直接运行，并避免在命令历史中暴露 API Key。

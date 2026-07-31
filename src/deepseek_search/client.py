@@ -1,4 +1,4 @@
-"""Core client — streaming search with connection abort before model summary."""
+"""Core client for raw streaming search and optional model summaries."""
 
 from __future__ import annotations
 
@@ -24,13 +24,14 @@ class SearchResult:
 
 @dataclass
 class SearchResponse:
-    """The complete search response — no AI summary."""
+    """The complete search response, with an optional AI summary."""
 
     query: str
     results: list[SearchResult] = field(default_factory=list)
     search_queries: list[str] = field(default_factory=list)
     total_search_requests: int = 0
     usage: dict = field(default_factory=dict)
+    summary: str | None = None
 
     @property
     def result_count(self) -> int:
@@ -68,10 +69,13 @@ def search(
     endpoint: str = DEFAULT_ENDPOINT,
     timeout: float = 30.0,
     force_search: bool = True,
+    summarize: bool = False,
 ) -> SearchResponse:
     """
-    Perform a web search via DeepSeek's API, then abort the stream before
-    the model can generate a summary.
+    Perform a web search via DeepSeek's API.
+
+    By default the stream is aborted before the model generates a summary.
+    Set ``summarize=True`` to keep reading and return the model's final text.
 
     Parameters
     ----------
@@ -89,6 +93,9 @@ def search(
         If True, force the model to use web search via ``tool_choice: any``.
         If False, the model may choose to answer from its own knowledge
         without searching.
+    summarize:
+        If True, let the model generate a final summary after searching.
+        This consumes output tokens. Defaults to False.
     """
 
     api_key = resolve_api_key(api_key)
@@ -98,10 +105,24 @@ def search(
         "name": "web_search",
     }
 
+    if summarize:
+        system_prompt = (
+            "You are a web search assistant. Always call the web_search tool "
+            "before answering. After searching, answer the user's query with "
+            "a concise summary grounded in the search results. Include source "
+            "links when useful. Do not answer from your own knowledge."
+        )
+    else:
+        system_prompt = (
+            "You are a web search proxy. For every query, your first and only "
+            "task is to call the web_search tool. Do not answer from your own "
+            "knowledge. Always search first."
+        )
+
     body: dict = {
         "model": model,
-        "max_tokens": 4096,
-        "system": "You are a web search proxy. For every query, your first and only task is to call the web_search tool. Do not answer from your own knowledge. Always search first.",
+        "max_tokens": 2048,
+        "system": system_prompt,
         "messages": [{"role": "user", "content": query}],
         "tools": [tool_def],
         "tool_choice": {"type": "any"} if force_search else {"type": "auto"},
@@ -112,10 +133,12 @@ def search(
     search_queries: list[str] = []
     usage: dict = {}
     partial_query: list[str] = []
+    summary_parts: list[str] = []
 
     current_block_type: str | None = None
     has_search_results = False  # only abort text after we've received results
     search_request_count = 0     # count web_search_tool_result blocks
+    collecting_summary = False
 
     with httpx.stream(
         "POST",
@@ -147,12 +170,26 @@ def search(
                 current_block_type = block.get("type")
 
                 if current_block_type == "text":
-                    # Only abort if we already have search results.
-                    # Pre-search text (e.g. "Let me look that up") is fine.
                     if has_search_results:
-                        break
+                        if not summarize:
+                            break
+                        collecting_summary = True
+                        initial_text = block.get("text", "")
+                        if initial_text:
+                            summary_parts.append(initial_text)
+                    elif summarize and not force_search:
+                        # With automatic tool choice, a direct model answer is
+                        # the final response when no search was performed.
+                        collecting_summary = True
+                        initial_text = block.get("text", "")
+                        if initial_text:
+                            summary_parts.append(initial_text)
 
                 elif current_block_type == "server_tool_use":
+                    collecting_summary = False
+                    if summarize:
+                        # Keep only text produced after the final search round.
+                        summary_parts = []
                     search_queries.append(
                         block.get("input", {}).get("query", "")
                     )
@@ -188,6 +225,13 @@ def search(
                 elif delta.get("type") == "input_json_delta":
                     partial_query.append(delta.get("partial_json", ""))
 
+                elif (
+                    delta.get("type") == "text_delta"
+                    and summarize
+                    and collecting_summary
+                ):
+                    summary_parts.append(delta.get("text", ""))
+
             # ── content block stop ─────────────────────────────────────
             elif etype == "content_block_stop":
                 if current_block_type == "server_tool_use":
@@ -206,9 +250,13 @@ def search(
                     # Results done. Don't break — there may be more rounds.
                     pass
 
+                elif current_block_type == "text":
+                    collecting_summary = False
+
             # ── message delta / stop ──────────────────────────────────────
             elif etype == "message_delta":
-                # We abort before this arrives — dead code kept for safety.
+                # Reached in summary mode; retained as a safety fallback in
+                # raw-results mode if the server omits the final text block.
                 usage.update(event.get("usage", {}))
 
             # ── message stop ───────────────────────────────────────────
@@ -228,4 +276,5 @@ def search(
         search_queries=search_queries,
         total_search_requests=search_request_count,
         usage=usage,
+        summary="".join(summary_parts).strip() or None,
     )

@@ -1,12 +1,12 @@
 # deepseek-search
 
-把 DeepSeek 的联网搜索从模型里剥离出来——**纯搜索结果，不要 AI 总结，几近零成本**。
+把 DeepSeek 的联网搜索从模型里剥离出来——默认只取纯搜索结果，不等待 AI 总结；需要时也可以显式开启模型总结。
 
 ## 原理
 
 DeepSeek API 的联网搜索是服务端执行的——模型收到你的问题，判断需要搜索，DeepSeek 服务器替你搜，然后把结果返回。正常流程下，搜完之后模型会写一大段总结，那部分**输出 token 是要收费的**。
 
-这个工具做的事情很简单：用流式 API 发请求，在搜索结果抵达的瞬间把 HTTP 连接掐断，模型来不及写总结，token 就省下来了。
+这个工具默认用流式 API 发请求，在搜索结果抵达后、模型开始输出总结时把 HTTP 连接掐断，从而节省输出 token。传入 `--summary` 时则继续读取模型总结。
 
 ```
 deepseek-search "你的问题"
@@ -16,14 +16,14 @@ POST api.deepseek.com/anthropic/v1/messages  (stream: true)
        │
        ├── thinking ───── 模型规划搜什么
        ├── tool_use  ───── 模型发起搜索
-       ├── RESULTS  ───── 搜索结果返回 ← 我们只收这个
+       ├── RESULTS  ───── 搜索结果返回
        ├── thinking ───── 模型思考怎么回复
-       ├── text     ───── 🔪 HTTP 连接在此断开
+       ├── text     ───── 默认在此断开；--summary 时继续读取
        │
-       └── 纯搜索结果，output token = 0
+       └── 默认返回纯搜索结果；可选返回模型总结
 ```
 
-搜索是 DeepSeek 服务端做的，搜索本身不收费。但我们切断了模型写总结的过程，所以只付输入 token 的钱（每次大约 10 个 token，几乎为零）。
+搜索是 DeepSeek 服务端做的。默认模式切断模型写总结的过程，主要产生输入 token；总结模式则会正常产生输出 token。真实费用以 DeepSeek 账单为准。
 
 ## 安装
 
@@ -99,6 +99,14 @@ export DEEPSEEK_API_KEY=sk-xxx...
 deepseek-search "Rust 教程"
 ```
 
+需要模型根据搜索结果继续总结：
+
+```bash
+deepseek-search --summary "Rust 2026 年有哪些重要更新？"
+```
+
+`--summary` 模式会正常产生输出 token，终端只显示模型总结，不再重复打印原始搜索结果列表。结构化结果仍可通过 `--summary --json` 或 Python API 获取。
+
 输出：
 
 ```
@@ -119,6 +127,12 @@ JSON 模式：
 deepseek-search --json "最新 AI 新闻"
 ```
 
+需要在 JSON 中同时返回总结：
+
+```bash
+deepseek-search --summary --json "最新 AI 新闻"
+```
+
 ### Python
 
 ```python
@@ -129,27 +143,44 @@ for r in resp.results:
     print(f"{r.title} — {r.url}")
 ```
 
+开启总结：
+
+```python
+resp = search("Rust 2026 年有哪些重要更新？", summarize=True)
+print(resp.summary)
+```
+
 ## 默认模型与成本
 
-| 项目 | 说明 |
-|---|---|
-| 默认模型 | `deepseek-v4-flash`（DeepSeek 最便宜的模型） |
-| 每次输入 token | ~9（仅 query + tool 定义） |
-| 每次输出 token | **0**（在模型写总结前断开连接） |
-| 每次费用 | 约 ¥0.0003（三万分之一元） |
+默认模型为 `deepseek-v4-flash`。下面的数据于 2026-07-31 使用
+[`benchmark.py`](benchmark.py) 中相同的 30 种查询分别实测，summary 最大输出
+为 2,048 token，两组均成功 30/30：
 
-下面是用 30 种不同查询实测后，外推到更大规模的数据：
+| 模式 | 平均输入 token | 平均输出 token | 平均耗时 | 平均搜索请求 | 平均结果数 | 单次估算费用 |
+|---|---:|---:|---:|---:|---:|---:|
+| 关闭 summary | 123.9* | 0* | 4.8s | 1.90 | 17.13 | ¥0.000124* |
+| 开启 summary | 23,442.5 | 1,298.7 | 13.4s | 2.17 | 20.27 | ¥0.026040 |
 
-| 搜索次数 | 输入 token | 输出 token | 总费用 |
-|---|---|---|---|
-| 100 | ~900 | ~0 | ¥0.03 |
-| 200 | ~1,800 | ~0 | ¥0.07 |
-| 500 | ~4,500 | ~0 | ¥0.17 |
-| 1,000 | ~9,000 | ~0 | ¥0.33 |
+按相同均值外推：
 
-> 即使每天搜 1000 次，一个月花费也不到 ¥10。
+| 模式 | 搜索次数 | 输入 token | 输出 token | 估算费用 |
+|---|---:|---:|---:|---:|
+| 关闭 summary | 100 | ~12,393* | ~0* | ¥0.0124* |
+| 关闭 summary | 200 | ~24,787* | ~0* | ¥0.0248* |
+| 关闭 summary | 500 | ~61,967* | ~0* | ¥0.0620* |
+| 关闭 summary | 1,000 | ~123,933* | ~0* | ¥0.1239* |
+| 开启 summary | 100 | ~2,344,250 | ~129,870 | ¥2.6040 |
+| 开启 summary | 200 | ~4,688,500 | ~259,740 | ¥5.2080 |
+| 开启 summary | 500 | ~11,721,250 | ~649,350 | ¥13.0199 |
+| 开启 summary | 1,000 | ~23,442,500 | ~1,298,700 | ¥26.0399 |
 
-偶尔（约 5-10% 的概率）模型会不触发搜索直接用自身知识回答，此时会产生少量输出 token，纳入统计后几乎可以忽略。
+费用按 DeepSeek 当前公布的 `deepseek-v4-flash` 缓存未命中价格估算：
+输入 ¥1/百万 token、输出 ¥2/百万 token，真实扣费以平台账单为准。
+详见 [DeepSeek 模型与价格](https://api-docs.deepseek.com/zh-cn/quick_start/pricing)。
+
+\* 关闭 summary 时，客户端会在最终 `usage` 到达前主动断流，因此这里只是
+客户端截流前可见的 token 与费用，不能视为完整账单。开启 summary 会读到
+最终响应，usage 更完整。
 
 ## 命令一览
 
@@ -160,10 +191,12 @@ for r in resp.results:
 | `deepseek-search status` | 查看当前 Key 状态 |
 | `deepseek-search "xxx"` | 搜索 |
 | `deepseek-search --json "xxx"` | 搜索（JSON 输出） |
+| `deepseek-search --summary "xxx"` | 搜索并让模型总结 |
+| `deepseek-search --summary --json "xxx"` | 搜索并以 JSON 返回结果和总结 |
 
 ## API
 
-### `search(query, *, api_key=None, model="deepseek-v4-flash", timeout=30.0, force_search=True)`
+### `search(query, *, api_key=None, model="deepseek-v4-flash", timeout=30.0, force_search=True, summarize=False)`
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -173,6 +206,7 @@ for r in resp.results:
 | `endpoint` | `str` | `"https://api.deepseek.com/anthropic/v1/messages"` | API 地址 |
 | `timeout` | `float` | `30.0` | 超时时间（秒） |
 | `force_search` | `bool` | `True` | 强制模型使用联网搜索 |
+| `summarize` | `bool` | `False` | 是否继续读取模型基于搜索结果生成的总结 |
 
 返回值 `SearchResponse`：
 
@@ -184,6 +218,7 @@ for r in resp.results:
 | `search_queries` | `list[str]` | 模型实际使用的搜索词 |
 | `total_search_requests` | `int` | 搜索 API 调用次数 |
 | `usage` | `dict` | Token 用量 |
+| `summary` | `str \| None` | 开启 `summarize` 后返回的模型总结 |
 
 ### `SearchResult`
 

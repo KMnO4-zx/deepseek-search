@@ -53,6 +53,15 @@ deepseek-search "Python 3.14 新特性"
 deepseek-search --json "Python 3.14 新特性"
 ```
 
+搜索并让模型总结：
+
+```bash
+deepseek-search --summary "Python 3.14 新特性"
+deepseek-search --summary --json "Python 3.14 新特性"
+```
+
+总结模式会继续读取模型输出并产生输出 token。人类可读输出只显示总结，不追加原始搜索结果列表；`--summary --json` 和 Python API 仍保留结构化 `results`。默认模式仍然只返回原始搜索结果。
+
 常用覆盖参数：
 
 ```bash
@@ -82,11 +91,12 @@ JSON 输出结构：
   ],
   "usage": {
     "input_tokens": 9
-  }
+  },
+  "summary": "仅在使用 --summary 时出现的模型总结"
 }
 ```
 
-字段可能为空，但键名应保持稳定。提前断流意味着 `usage` 可能只有请求早期已经返回的统计。
+默认 JSON 输出不包含 `summary` 键，以保持现有 schema 不变。使用 `--summary` 时该键才会出现。提前断流意味着默认模式的 `usage` 可能只有请求早期已经返回的统计。
 
 ## Python API
 
@@ -111,6 +121,7 @@ search(
     endpoint="https://api.deepseek.com/anthropic/v1/messages",
     timeout=30.0,
     force_search=True,
+    summarize=False,
 )
 ```
 
@@ -120,10 +131,13 @@ search(
 - `results: list[SearchResult]`：原始搜索结果。
 - `search_queries: list[str]`：模型实际提交给搜索工具的查询。
 - `total_search_requests: int`：收到的搜索结果 block 数量。
-- `usage: dict`：断流前已收到的 token 统计。
+- `usage: dict`：客户端已收到的 token 统计；默认断流模式下可能不完整。
 - `result_count: int`：`len(results)` 的只读属性。
+- `summary: str | None`：开启 `summarize` 后组装出的模型总结。
 
 `SearchResult` 包含 `title`、`url` 和可选 `page_age`。
+
+`summarize=False` 保持原来的提前断流行为。设置为 `True` 后会继续读取模型文本直到响应结束，并获得更完整的 output token 统计。
 
 ## 错误处理
 

@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepseek-search"
-version = "0.1.0"
-description = "Strip DeepSeek's web search out of the model — pure search results, no AI summary, near-zero cost."
+version = "0.2.0"
+description = "DeepSeek web search with raw results by default and optional AI summaries."
 readme = "README.md"
 license = "MIT"
 requires-python = ">=3.10"

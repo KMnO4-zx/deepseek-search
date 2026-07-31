@@ -78,7 +78,10 @@ def main(argv: list[str] | None = None) -> None:
     # ── search mode ──────────────────────────────────────────────────────
     parser = argparse.ArgumentParser(
         prog="deepseek-search",
-        description="Web search via DeepSeek — raw results, no AI summary.",
+        description=(
+            "Web search via DeepSeek — raw results by default, "
+            "optional AI summary."
+        ),
     )
 
     parser.add_argument(
@@ -121,9 +124,18 @@ def main(argv: list[str] | None = None) -> None:
     )
 
     parser.add_argument(
+        "--summary",
+        "--summarize",
+        dest="summarize",
+        action="store_true",
+        default=False,
+        help="Let the model summarize the search results (uses output tokens).",
+    )
+
+    parser.add_argument(
         "--version",
         action="version",
-        version="deepseek-search 0.1.0",
+        version="deepseek-search 0.2.0",
     )
 
     args = parser.parse_args(argv) if argv else parser.parse_args()
@@ -136,6 +148,7 @@ def main(argv: list[str] | None = None) -> None:
             model=args.model,
             endpoint=args.endpoint,
             timeout=args.timeout,
+            summarize=args.summarize,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -145,23 +158,26 @@ def main(argv: list[str] | None = None) -> None:
         sys.exit(1)
 
     if args.json_output:
+        payload = {
+            "query": response.query,
+            "search_queries": response.search_queries,
+            "total_search_requests": response.total_search_requests,
+            "result_count": response.result_count,
+            "results": [
+                {
+                    "title": r.title,
+                    "url": r.url,
+                    "page_age": r.page_age,
+                }
+                for r in response.results
+            ],
+            "usage": response.usage,
+        }
+        if args.summarize:
+            payload["summary"] = response.summary
         print(
             json.dumps(
-                {
-                    "query": response.query,
-                    "search_queries": response.search_queries,
-                    "total_search_requests": response.total_search_requests,
-                    "result_count": response.result_count,
-                    "results": [
-                        {
-                            "title": r.title,
-                            "url": r.url,
-                            "page_age": r.page_age,
-                        }
-                        for r in response.results
-                    ],
-                    "usage": response.usage,
-                },
+                payload,
                 indent=2,
                 ensure_ascii=False,
             )
@@ -174,10 +190,14 @@ def main(argv: list[str] | None = None) -> None:
             output_tokens = response.usage.get("output_tokens", 0)
             print(f"    ~{input_tokens:,} input tokens  ·  ~{output_tokens:,} output tokens")
         print()
-        for i, r in enumerate(response.results, 1):
-            age = f"  [{r.page_age}]" if r.page_age else ""
-            print(f"  {i:2d}. {r.title}{age}")
-            print(f"      {r.url}")
+        if args.summarize:
+            print("  Summary")
+            print(f"  {response.summary or '(No summary returned.)'}")
+        else:
+            for i, r in enumerate(response.results, 1):
+                age = f"  [{r.page_age}]" if r.page_age else ""
+                print(f"  {i:2d}. {r.title}{age}")
+                print(f"      {r.url}")
 
 
 if __name__ == "__main__":
