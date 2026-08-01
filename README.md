@@ -107,6 +107,14 @@ deepseek-search --summary "Rust 2026 年有哪些重要更新？"
 
 `--summary` 模式会正常产生输出 token，终端只显示模型总结，不再重复打印原始搜索结果列表。结构化结果仍可通过 `--summary --json` 或 Python API 获取。
 
+需要把搜索结果交给后续模型推理时，可以使用受约束的 Evidence 模式：
+
+```bash
+deepseek-search --evidence "The Ages of Lulu director"
+```
+
+该模式要求 DeepSeek 尽量只搜索一次，最多返回 8 条带来源标题的独立事实，不给出最终答案，也不在 Evidence 文本中加入 URL。`--evidence --json` 仍会保留带 URL 的结构化搜索结果和 `total_search_requests`。
+
 输出：
 
 ```
@@ -148,6 +156,13 @@ for r in resp.results:
 ```python
 resp = search("Rust 2026 年有哪些重要更新？", summarize=True)
 print(resp.summary)
+```
+
+提取证据：
+
+```python
+resp = search("The Ages of Lulu director", mode="evidence")
+print(resp.evidence)
 ```
 
 ## 默认模型与成本
@@ -193,10 +208,12 @@ print(resp.summary)
 | `deepseek-search --json "xxx"` | 搜索（JSON 输出） |
 | `deepseek-search --summary "xxx"` | 搜索并让模型总结 |
 | `deepseek-search --summary --json "xxx"` | 搜索并以 JSON 返回结果和总结 |
+| `deepseek-search --evidence "xxx"` | 搜索并提取受约束的独立证据 |
+| `deepseek-search --evidence --json "xxx"` | 返回 Evidence 和带 URL 的结构化结果 |
 
 ## API
 
-### `search(query, *, api_key=None, model="deepseek-v4-flash", timeout=30.0, force_search=True, summarize=False)`
+### `search(query, *, api_key=None, model="deepseek-v4-flash", timeout=30.0, force_search=True, summarize=False, mode=None)`
 
 | 参数 | 类型 | 默认值 | 说明 |
 |---|---|---|---|
@@ -207,6 +224,7 @@ print(resp.summary)
 | `timeout` | `float` | `30.0` | 超时时间（秒） |
 | `force_search` | `bool` | `True` | 强制模型使用联网搜索 |
 | `summarize` | `bool` | `False` | 是否继续读取模型基于搜索结果生成的总结 |
+| `mode` | `"raw" \| "summary" \| "evidence" \| None` | `None` | 显式选择模式；省略时继续按 `summarize` 决定 |
 
 返回值 `SearchResponse`：
 
@@ -219,6 +237,7 @@ print(resp.summary)
 | `total_search_requests` | `int` | 搜索 API 调用次数 |
 | `usage` | `dict` | Token 用量 |
 | `summary` | `str \| None` | 开启 `summarize` 后返回的模型总结 |
+| `evidence` | `str \| None` | Evidence 模式返回的来源化事实文本 |
 
 ### `SearchResult`
 

@@ -21,6 +21,8 @@ uv sync
 uv run deepseek-search --help
 ```
 
+仓库内的 `uv run deepseek-search` 直接运行当前工作树，包括尚未 commit 的修改。直接调用全局安装的 `deepseek-search` 可能仍是旧版本。
+
 ## 凭据管理
 
 优先使用交互式登录，避免 API Key 进入 shell 历史：
@@ -62,6 +64,15 @@ deepseek-search --summary --json "Python 3.14 新特性"
 
 总结模式会继续读取模型输出并产生输出 token。人类可读输出只显示总结，不追加原始搜索结果列表；`--summary --json` 和 Python API 仍保留结构化 `results`。默认模式仍然只返回原始搜索结果。
 
+为 Search-R1 或其他后续推理方提取受约束证据：
+
+```bash
+deepseek-search --evidence "The Ages of Lulu director"
+deepseek-search --evidence --json "The Ages of Lulu director"
+```
+
+Evidence 文本最多包含 8 条带来源标题的独立事实，要求不回答原问题、不跨来源推理、不输出 URL。普通文本输出只显示 Evidence；JSON 同时保留 `results` 中的 URL、`total_search_requests`、最终 `usage` 和 `evidence`。`--summary`、`--summarize` 与 `--evidence` 互斥。
+
 常用覆盖参数：
 
 ```bash
@@ -91,12 +102,11 @@ JSON 输出结构：
   ],
   "usage": {
     "input_tokens": 9
-  },
-  "summary": "仅在使用 --summary 时出现的模型总结"
+  }
 }
 ```
 
-默认 JSON 输出不包含 `summary` 键，以保持现有 schema 不变。使用 `--summary` 时该键才会出现。提前断流意味着默认模式的 `usage` 可能只有请求早期已经返回的统计。
+默认 JSON 输出不包含 `summary` 或 `evidence`，以保持原有 schema。使用 `--summary` 时增加 `"summary": "..."`；使用 `--evidence` 时增加 `"evidence": "[1] Source: ..."`。提前断流意味着 Raw 的 `usage` 可能只有请求早期已经返回的统计。
 
 ## Python API
 
@@ -122,6 +132,7 @@ search(
     timeout=30.0,
     force_search=True,
     summarize=False,
+    mode=None,
 )
 ```
 
@@ -133,12 +144,35 @@ search(
 - `total_search_requests: int`：收到的搜索结果 block 数量。
 - `usage: dict`：客户端已收到的 token 统计；默认断流模式下可能不完整。
 - `result_count: int`：`len(results)` 的只读属性。
-- `summary: str | None`：开启 `summarize` 后组装出的模型总结。
+- `summary: str | None`：Summary 模式组装出的模型总结。
+- `evidence: str | None`：Evidence 模式从搜索后最终文本组装出的来源化事实。
 
 `SearchResult` 包含 `title`、`url` 和可选 `page_age`。
 
-`summarize=False` 保持原来的提前断流行为。设置为 `True` 后会继续读取模型文本直到响应结束，并获得更完整的 output token 统计。
+模式兼容规则：
+
+| 调用 | 模式 | 生成字段 |
+|---|---|---|
+| `search(query)`、`summarize=False`、`mode="raw"` | Raw | `summary=None`、`evidence=None` |
+| `summarize=True`、`mode="summary"` | Summary | `summary` |
+| `mode="evidence"` | Evidence | `evidence` |
+
+未传 `mode` 时继续由 `summarize` 决定，保证旧调用兼容。`summarize=True` 与 `mode="raw"` 或 `mode="evidence"` 同时出现时抛出 `ValueError`；与 `mode="summary"` 同时出现合法。
+
+Evidence Python 示例：
+
+```python
+response = search("The Ages of Lulu director", mode="evidence")
+print(response.evidence)
+
+# 供程序记录和监控
+print(response.total_search_requests)
+for item in response.results:
+    print(item.title, item.url)
+```
+
+Summary 和 Evidence 都会继续读取到响应结束并获得更完整的 output token 统计；Raw 保持原来的提前断流行为。Evidence 的语义约束由专用 system prompt 实现，调用方仍应监控搜索次数并按需要验证证据质量。
 
 ## 错误处理
 
-未找到凭据时，`search()` 抛出 `ValueError`。HTTP 非成功状态通过 `httpx` 抛出异常，流内 DeepSeek `error` 事件抛出 `RuntimeError`。库调用方应按自己的重试策略处理网络异常，不要默认无限重试或吞掉鉴权错误。
+未找到凭据、模式名称无效或参数冲突时，`search()` 抛出 `ValueError`。HTTP 非成功状态通过 `httpx` 抛出异常，流内 DeepSeek `error` 事件抛出 `RuntimeError`。库调用方应按自己的重试策略处理网络异常，不要默认无限重试或吞掉鉴权错误。

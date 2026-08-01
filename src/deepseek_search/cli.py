@@ -80,7 +80,7 @@ def main(argv: list[str] | None = None) -> None:
         prog="deepseek-search",
         description=(
             "Web search via DeepSeek — raw results by default, "
-            "optional AI summary."
+            "with optional summary or constrained evidence."
         ),
     )
 
@@ -123,7 +123,9 @@ def main(argv: list[str] | None = None) -> None:
         help="Output raw JSON instead of pretty-printed text.",
     )
 
-    parser.add_argument(
+    output_mode = parser.add_mutually_exclusive_group()
+
+    output_mode.add_argument(
         "--summary",
         "--summarize",
         dest="summarize",
@@ -132,10 +134,17 @@ def main(argv: list[str] | None = None) -> None:
         help="Let the model summarize the search results (uses output tokens).",
     )
 
+    output_mode.add_argument(
+        "--evidence",
+        action="store_true",
+        default=False,
+        help="Return constrained source-titled evidence without a final answer.",
+    )
+
     parser.add_argument(
         "--version",
         action="version",
-        version="deepseek-search 0.2.0",
+        version="deepseek-search 0.3.0",
     )
 
     args = parser.parse_args(argv) if argv else parser.parse_args()
@@ -149,6 +158,7 @@ def main(argv: list[str] | None = None) -> None:
             endpoint=args.endpoint,
             timeout=args.timeout,
             summarize=args.summarize,
+            mode="evidence" if args.evidence else None,
         )
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
@@ -175,6 +185,8 @@ def main(argv: list[str] | None = None) -> None:
         }
         if args.summarize:
             payload["summary"] = response.summary
+        elif args.evidence:
+            payload["evidence"] = response.evidence
         print(
             json.dumps(
                 payload,
@@ -183,6 +195,10 @@ def main(argv: list[str] | None = None) -> None:
             )
         )
     else:
+        if args.evidence:
+            print(response.evidence or "(No evidence returned.)")
+            return
+
         print(f"🔍  {response.query}")
         print(f"    {response.result_count} results  ·  {response.total_search_requests} search request(s)")
         if response.usage:

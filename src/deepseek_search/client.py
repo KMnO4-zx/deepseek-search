@@ -1,10 +1,11 @@
-"""Core client for raw streaming search and optional model summaries."""
+"""Core client for raw search, summaries, and constrained evidence."""
 
 from __future__ import annotations
 
 import json
 import re
 from dataclasses import dataclass, field
+from typing import Literal
 
 import httpx
 
@@ -24,7 +25,7 @@ class SearchResult:
 
 @dataclass
 class SearchResponse:
-    """The complete search response, with an optional AI summary."""
+    """The complete search response, with optional generated text."""
 
     query: str
     results: list[SearchResult] = field(default_factory=list)
@@ -32,6 +33,7 @@ class SearchResponse:
     total_search_requests: int = 0
     usage: dict = field(default_factory=dict)
     summary: str | None = None
+    evidence: str | None = None
 
     @property
     def result_count(self) -> int:
@@ -43,6 +45,46 @@ class SearchResponse:
 DEFAULT_ENDPOINT = "https://api.deepseek.com/anthropic/v1/messages"
 DEFAULT_MODEL = "deepseek-v4-flash"
 SSE_DATA = re.compile(r"^data:\s*(\{.*\})$")
+SearchMode = Literal["raw", "summary", "evidence"]
+
+RAW_SYSTEM_PROMPT = (
+    "You are a web search proxy. For every query, your first and only "
+    "task is to call the web_search tool. Do not answer from your own "
+    "knowledge. Always search first."
+)
+
+SUMMARY_SYSTEM_PROMPT = (
+    "You are a web search assistant. Always call the web_search tool "
+    "before answering. After searching, answer the user's query with "
+    "a concise summary grounded in the search results. Include source "
+    "links when useful. Do not answer from your own knowledge."
+)
+
+EVIDENCE_SYSTEM_PROMPT = """You are a web evidence retriever.
+
+Always call the web_search tool before producing any text.
+Use a single web search whenever possible.
+
+Return only factual evidence explicitly supported by the retrieved search
+results. Do not answer the user's original question. Do not provide a final
+conclusion. Do not compare entities, determine which candidate is correct,
+infer family relationships, temporal ordering, or causal relationships, or
+combine facts across sources.
+
+Return at most 8 independent evidence items. Each item must contain:
+- the source title
+- one or two concise factual sentences grounded in that source
+
+Do not include URLs in the evidence text.
+Do not use phrases such as "the answer is", "therefore", or "in conclusion".
+
+Format:
+
+[1] Source: <source title>
+Evidence: <fact stated by this source>
+
+[2] Source: <source title>
+Evidence: <fact stated by this source>"""
 
 
 def _parse_sse(line: str) -> dict | None:
@@ -58,6 +100,23 @@ def _parse_sse(line: str) -> dict | None:
         return None
 
 
+def _resolve_mode(*, summarize: bool, mode: SearchMode | None) -> SearchMode:
+    """Resolve the new mode switch while preserving the summarize API."""
+    if mode is None:
+        return "summary" if summarize else "raw"
+
+    if mode not in ("raw", "summary", "evidence"):
+        raise ValueError("mode must be one of: 'raw', 'summary', 'evidence'")
+
+    if summarize and mode in ("raw", "evidence"):
+        raise ValueError(
+            f"summarize=True cannot be combined with mode={mode!r}; "
+            "use mode='summary' or omit mode"
+        )
+
+    return mode
+
+
 # ── public API ──────────────────────────────────────────────────────────────
 
 
@@ -70,12 +129,15 @@ def search(
     timeout: float = 30.0,
     force_search: bool = True,
     summarize: bool = False,
+    mode: SearchMode | None = None,
 ) -> SearchResponse:
     """
     Perform a web search via DeepSeek's API.
 
     By default the stream is aborted before the model generates a summary.
-    Set ``summarize=True`` to keep reading and return the model's final text.
+    Set ``summarize=True`` or ``mode="summary"`` to return the model's final
+    answer. Set ``mode="evidence"`` to return constrained, source-titled facts
+    without asking the model to answer the original question.
 
     Parameters
     ----------
@@ -96,7 +158,12 @@ def search(
     summarize:
         If True, let the model generate a final summary after searching.
         This consumes output tokens. Defaults to False.
+    mode:
+        Explicitly select ``"raw"``, ``"summary"``, or ``"evidence"``.
+        When omitted, ``summarize`` preserves its existing behavior.
     """
+
+    resolved_mode = _resolve_mode(summarize=summarize, mode=mode)
 
     api_key = resolve_api_key(api_key)
 
@@ -105,19 +172,11 @@ def search(
         "name": "web_search",
     }
 
-    if summarize:
-        system_prompt = (
-            "You are a web search assistant. Always call the web_search tool "
-            "before answering. After searching, answer the user's query with "
-            "a concise summary grounded in the search results. Include source "
-            "links when useful. Do not answer from your own knowledge."
-        )
-    else:
-        system_prompt = (
-            "You are a web search proxy. For every query, your first and only "
-            "task is to call the web_search tool. Do not answer from your own "
-            "knowledge. Always search first."
-        )
+    system_prompt = {
+        "raw": RAW_SYSTEM_PROMPT,
+        "summary": SUMMARY_SYSTEM_PROMPT,
+        "evidence": EVIDENCE_SYSTEM_PROMPT,
+    }[resolved_mode]
 
     body: dict = {
         "model": model,
@@ -133,12 +192,12 @@ def search(
     search_queries: list[str] = []
     usage: dict = {}
     partial_query: list[str] = []
-    summary_parts: list[str] = []
+    final_text_parts: list[str] = []
 
     current_block_type: str | None = None
     has_search_results = False  # only abort text after we've received results
     search_request_count = 0     # count web_search_tool_result blocks
-    collecting_summary = False
+    collecting_final_text = False
 
     with httpx.stream(
         "POST",
@@ -171,25 +230,25 @@ def search(
 
                 if current_block_type == "text":
                     if has_search_results:
-                        if not summarize:
+                        if resolved_mode == "raw":
                             break
-                        collecting_summary = True
+                        collecting_final_text = True
                         initial_text = block.get("text", "")
                         if initial_text:
-                            summary_parts.append(initial_text)
-                    elif summarize and not force_search:
+                            final_text_parts.append(initial_text)
+                    elif resolved_mode == "summary" and not force_search:
                         # With automatic tool choice, a direct model answer is
                         # the final response when no search was performed.
-                        collecting_summary = True
+                        collecting_final_text = True
                         initial_text = block.get("text", "")
                         if initial_text:
-                            summary_parts.append(initial_text)
+                            final_text_parts.append(initial_text)
 
                 elif current_block_type == "server_tool_use":
-                    collecting_summary = False
-                    if summarize:
+                    collecting_final_text = False
+                    if resolved_mode != "raw":
                         # Keep only text produced after the final search round.
-                        summary_parts = []
+                        final_text_parts = []
                     search_queries.append(
                         block.get("input", {}).get("query", "")
                     )
@@ -227,10 +286,10 @@ def search(
 
                 elif (
                     delta.get("type") == "text_delta"
-                    and summarize
-                    and collecting_summary
+                    and resolved_mode != "raw"
+                    and collecting_final_text
                 ):
-                    summary_parts.append(delta.get("text", ""))
+                    final_text_parts.append(delta.get("text", ""))
 
             # ── content block stop ─────────────────────────────────────
             elif etype == "content_block_stop":
@@ -251,12 +310,12 @@ def search(
                     pass
 
                 elif current_block_type == "text":
-                    collecting_summary = False
+                    collecting_final_text = False
 
             # ── message delta / stop ──────────────────────────────────────
             elif etype == "message_delta":
-                # Reached in summary mode; retained as a safety fallback in
-                # raw-results mode if the server omits the final text block.
+                # Full-response modes reach final usage. This is retained as a
+                # safety fallback in raw mode if the final text block is absent.
                 usage.update(event.get("usage", {}))
 
             # ── message stop ───────────────────────────────────────────
@@ -270,11 +329,14 @@ def search(
                     f"DeepSeek API error: {err.get('message', 'unknown')}"
                 )
 
+    final_text = "".join(final_text_parts).strip() or None
+
     return SearchResponse(
         query=query,
         results=results,
         search_queries=search_queries,
         total_search_requests=search_request_count,
         usage=usage,
-        summary="".join(summary_parts).strip() or None,
+        summary=final_text if resolved_mode == "summary" else None,
+        evidence=final_text if resolved_mode == "evidence" else None,
     )

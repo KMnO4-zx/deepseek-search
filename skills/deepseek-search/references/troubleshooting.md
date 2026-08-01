@@ -60,12 +60,24 @@
 
 这是提前断流的预期结果之一：客户端通常在最终 `message_delta` 前退出。把 `usage` 当作部分观测，不要据此断言服务端最终账单。需要计费结论时查看 DeepSeek 平台账单或在明确授权下做受控 benchmark。
 
-使用 `--summary` / `summarize=True` 时客户端会读取到响应结束，通常能拿到最终 output token；如果 `summary` 仍为空，检查搜索结果之后是否出现 `text` block 和 `text_delta`。
+使用 Summary 或 Evidence 时客户端会读取到响应结束，通常能拿到最终 output token；如果 `summary` / `evidence` 仍为空，检查搜索结果之后是否出现 `text` block、`text_delta` 和 `message_stop`。
+
+## Evidence 为空或违反约束
+
+按以下顺序检查：
+
+1. 确认使用 CLI `--evidence` 或 Python `mode="evidence"`，并确认版本至少为 `0.3.0`。
+2. `result_count > 0` 但 `evidence is None`：检查搜索结果之后是否存在最终 text block，客户端是否完整消费到 `message_stop`。
+3. `total_search_requests > 1`：这不一定是客户端重复请求；计数来自同一 SSE 流中的 `web_search_tool_result` block。“尽量一次搜索”只是 Evidence prompt 约束。
+4. Evidence 出现 URL、最终答案、实体比较或跨来源推理：先确认请求使用专用 Evidence system prompt，再保存脱敏文本作为回归样本。语义边界依赖模型遵循提示词，不能声称绝对保证。
+5. 确认 URL 仍存在于 `response.results` 或 Evidence JSON 的 `results` 中；不要为了清理 Evidence 文本删除结构化 URL。
+
+参数冲突 `summarize=True cannot be combined with mode='raw'/'evidence'` 属于预期校验。删除 `summarize=True`，或改用 `mode="summary"`。
 
 ## CLI 与 Python 行为不同
 
 - CLI 默认使用强制搜索，没有暴露 `force_search` 开关。
-- CLI 默认不总结；`--summary` 会继续读取模型文本并产生输出 token。
+- CLI 默认是 Raw；`--summary` 和 `--evidence` 都会继续读取模型文本并产生输出 token。
 - CLI 会捕获异常、输出到 stderr 并以状态码 1 退出；Python API 直接抛异常。
 - CLI `status` 只读取配置文件；Python `resolve_api_key()` 还会检查显式参数和环境变量。
-- CLI JSON 是 dataclass 字段的序列化视图，不包含模型总结文本。
+- CLI Raw JSON 不增加生成文本字段；Summary JSON 增加 `summary`，Evidence JSON 增加 `evidence`，两者都保留结构化 `results`。

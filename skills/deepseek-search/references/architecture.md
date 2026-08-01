@@ -4,7 +4,7 @@
 
 | 路径 | 职责 |
 |---|---|
-| `src/deepseek_search/client.py` | 请求体、SSE 解析、结果收集、提前断流、可选总结、公开数据类型 |
+| `src/deepseek_search/client.py` | 三模式解析、专用 prompt、SSE 处理、结果与最终文本收集、公开数据类型 |
 | `src/deepseek_search/config.py` | XDG 配置路径、Key 保存/读取/删除、凭据优先级 |
 | `src/deepseek_search/cli.py` | `login/logout/status` 分发、搜索参数、文本与 JSON 输出 |
 | `src/deepseek_search/__init__.py` | 导出公开 Python API 和版本 |
@@ -19,9 +19,22 @@
 - `stream` 必须为 `true`。
 - tools 中声明 `{ "type": "web_search_20260209", "name": "web_search" }`。
 - `force_search=True` 时使用 `tool_choice: {"type": "any"}`；否则使用 `auto`。
-- system prompt 要求模型先调用搜索工具。
+- 根据解析后的模式选择独立的 Raw、Summary 或 Evidence system prompt；三者都要求模型先调用搜索工具。
 
 这些字段属于远端协议，可能独立于本包版本变化。出现 4xx、未知工具或事件字段变化时，先用脱敏最小请求核实协议，再改解析器。
+
+## 模式解析
+
+`_resolve_mode()` 保留旧 `summarize` 参数并支持显式 `mode`：
+
+| 参数 | 解析结果 |
+|---|---|
+| 未传 `mode`，`summarize=False` | `raw` |
+| 未传 `mode`，`summarize=True` | `summary` |
+| `mode="raw"/"summary"/"evidence"` | 对应显式模式 |
+| `summarize=True` 且显式 `raw` 或 `evidence` | `ValueError` |
+
+Evidence prompt 要求尽量只发起一次搜索，只返回来源中明确出现的独立事实，最多 8 条，每条带来源标题，不代答、不比较、不推导关系、不跨来源综合，Evidence 文本不含 URL。这些是模型提示词约束；`total_search_requests` 才是实际搜索轮数的客户端观测。
 
 ## SSE 状态流
 
@@ -36,8 +49,9 @@ message_start
   -> content_block_delta(web_search_delta) *
   -> content_block_stop
   -> content_block_start(text)
-       -> 默认模式：在这里断开
-       -> summarize=True：收集 text_delta，直到 message_stop
+       -> Raw：在这里断开
+       -> Summary：收集 text_delta 到 message_stop，写入 summary
+       -> Evidence：收集 text_delta 到 message_stop，写入 evidence
 ```
 
 关键状态：
@@ -46,7 +60,7 @@ message_start
 - `partial_query`：拼接分段到达的搜索 query JSON。
 - `has_search_results`：确认至少进入过搜索结果 block 后，才允许在 text block 处断流。
 - `search_request_count`：统计 `web_search_tool_result` block，而不是结果条数。
-- `collecting_summary`：开启总结后，只收集最后一轮搜索之后的模型文本。
+- `final_text_parts` / `collecting_final_text`：Summary 和 Evidence 只收集最后一轮搜索之后的模型文本。
 
 结果可能完整出现在 `content_block_start.content_block.content`，也可能通过 `web_search_delta.partial` 流式到达。修改时必须保留两条路径，并用捕获的协议样本检查是否需要去重。
 
@@ -55,8 +69,10 @@ message_start
 ## 不变量
 
 - 在收到结果前不要因 text block 断流。
-- 默认模式不要等待模型总结完成后再返回，否则失去该工具的成本和延迟优势。
-- `summarize=True` 时必须读取完整文本和最终 usage，并明确该模式会产生输出 token。
+- Raw 不要等待模型文本完成后再返回，否则失去该工具的成本和延迟优势。
+- Summary 和 Evidence 必须读取完整文本、`message_stop` 与最终 usage，并明确它们会产生输出 token。
+- Raw 返回 `summary=None`、`evidence=None`；Summary 只写 `summary`；Evidence 只写 `evidence`。
+- Evidence 保留结构化 `results` 的 URL，但客户端不要主动把 URL 拼入 `evidence`。
 - 不要把 thinking 或模型文本混入 `SearchResult`。
 - 解析缺失字段时继续使用安全默认值，避免单条不完整结果终止整次搜索。
 - 保持同步公开 API；新增异步 API 时使用新入口，不要悄悄改变 `search()` 的返回方式。
@@ -66,7 +82,7 @@ message_start
 
 公开版本同时出现在 `pyproject.toml`、`src/deepseek_search/__init__.py` 和 CLI `--version`。发布版本变更时同步三处。
 
-CLI 搜索模式把位置参数以空格拼成一个 query。`login/logout/status` 只在第一个参数完全匹配时走子命令分发。新增子命令时同时更新分发表、README 和 Skill reference。
+CLI 搜索模式把位置参数以空格拼成一个 query。`--summary` / `--summarize` 与 `--evidence` 位于同一互斥组；Evidence 普通输出只打印 Evidence，Evidence JSON 增加 `evidence` 并继续保留结果列表。Raw 和 Summary 的既有 JSON 字段保持不变。`login/logout/status` 只在第一个参数完全匹配时走子命令分发。
 
 ## 验证命令
 
@@ -91,4 +107,4 @@ benchmark 会产生真实 API 请求并可能计费，只在用户要求、凭�
 uv run python benchmark.py 30 --mode both --workers 5
 ```
 
-`--mode` 支持 `raw`、`summary` 和 `both`。关闭 summary 时只能观测提前断流前的部分 usage；不要把它当作最终账单。协议修改应优先添加不访问网络的 SSE 事件样本测试，再选择一次最小端到端搜索验证。
+benchmark 的 `--mode` 仍只支持 `raw`、`summary` 和 `both`，尚未加入 Evidence benchmark。Raw 只能观测提前断流前的部分 usage；不要把它当作最终账单。协议修改应优先添加不访问网络的 SSE 事件样本测试，再选择一次最小端到端搜索验证。
