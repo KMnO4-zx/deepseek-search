@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "deepseek-search"
-version = "0.3.0"
+version = "0.3.1"
 description = "DeepSeek web search with raw, summary, and constrained evidence modes."
 readme = "README.md"
 license = "MIT"

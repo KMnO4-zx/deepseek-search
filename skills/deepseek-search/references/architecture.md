@@ -17,7 +17,7 @@
 
 - 请求头使用 `x-api-key`，不是 Bearer token。
 - `stream` 必须为 `true`。
-- tools 中声明 `{ "type": "web_search_20260209", "name": "web_search" }`。
+- Raw 和 Summary 的 tools 保持 `{ "type": "web_search_20260209", "name": "web_search" }`；Evidence 额外设置 `"max_uses": 1`。
 - `force_search=True` 时使用 `tool_choice: {"type": "any"}`；否则使用 `auto`。
 - 根据解析后的模式选择独立的 Raw、Summary 或 Evidence system prompt；三者都要求模型先调用搜索工具。
 
@@ -34,7 +34,7 @@
 | `mode="raw"/"summary"/"evidence"` | 对应显式模式 |
 | `summarize=True` 且显式 `raw` 或 `evidence` | `ValueError` |
 
-Evidence prompt 要求尽量只发起一次搜索，只返回来源中明确出现的独立事实，最多 8 条，每条带来源标题，不代答、不比较、不推导关系、不跨来源综合，Evidence 文本不含 URL。这些是模型提示词约束；`total_search_requests` 才是实际搜索轮数的客户端观测。
+Evidence prompt 要求恰好调用一次 `web_search`，禁止第二次调用、改写 query 后重搜或使用首轮之外的结果；首轮证据不足时返回 `Insufficient evidence from this search.`。`max_uses=1` 提供服务端限制，客户端在 SSE 完成后拒绝超过一个 `web_search_tool_result` 的响应。独立事实、最多 8 条、来源标题、不代答、不比较、不推导关系、不跨来源综合和 Evidence 文本不含 URL 仍是模型语义约束。
 
 ## SSE 状态流
 
@@ -62,6 +62,8 @@ message_start
 - `search_request_count`：统计 `web_search_tool_result` block，而不是结果条数。
 - `final_text_parts` / `collecting_final_text`：Summary 和 Evidence 只收集最后一轮搜索之后的模型文本。
 
+Evidence 的防御性校验允许 0 或 1 个搜索结果 block；超过 1 个时，在构造 `SearchResponse` 前抛出只包含实际次数的 `RuntimeError`。Raw 和 Summary 不执行该校验。
+
 结果可能完整出现在 `content_block_start.content_block.content`，也可能通过 `web_search_delta.partial` 流式到达。修改时必须保留两条路径，并用捕获的协议样本检查是否需要去重。
 
 `_parse_sse()` 只接受单行 `data: {JSON}`。`[DONE]`、空行和非 JSON 行会被忽略。若远端切换为多行 data 或不同 framing，需要先补离线样本再调整 parser。
@@ -71,6 +73,8 @@ message_start
 - 在收到结果前不要因 text block 断流。
 - Raw 不要等待模型文本完成后再返回，否则失去该工具的成本和延迟优势。
 - Summary 和 Evidence 必须读取完整文本、`message_stop` 与最终 usage，并明确它们会产生输出 token。
+- Evidence 工具必须包含 `max_uses=1`；Raw 和 Summary 的工具定义及 `tool_choice` 保持原状。
+- Evidence 收到多个搜索结果 block 时必须报错；Raw 和 Summary 继续保留多轮搜索行为。
 - Raw 返回 `summary=None`、`evidence=None`；Summary 只写 `summary`；Evidence 只写 `evidence`。
 - Evidence 保留结构化 `results` 的 URL，但客户端不要主动把 URL 拼入 `evidence`。
 - 不要把 thinking 或模型文本混入 `SearchResult`。

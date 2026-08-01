@@ -144,7 +144,7 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument(
         "--version",
         action="version",
-        version="deepseek-search 0.3.0",
+        version="deepseek-search 0.3.1",
     )
 
     args = parser.parse_args(argv) if argv else parser.parse_args()

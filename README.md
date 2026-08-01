@@ -113,7 +113,7 @@ deepseek-search --summary "Rust 2026 年有哪些重要更新？"
 deepseek-search --evidence "The Ages of Lulu director"
 ```
 
-该模式要求 DeepSeek 尽量只搜索一次，最多返回 8 条带来源标题的独立事实，不给出最终答案，也不在 Evidence 文本中加入 URL。`--evidence --json` 仍会保留带 URL 的结构化搜索结果和 `total_search_requests`。
+Evidence 模式通过 `max_uses=1` 将每次调用限制为最多一次 Web Search；客户端若收到多个搜索结果块也会拒绝该响应。模型最多返回 8 条带来源标题的独立事实，证据不足时返回 `Insufficient evidence from this search.`，不提供最终答案，也不在 Evidence 文本中加入 URL。`--evidence --json` 仍会保留带 URL 的结构化搜索结果和 `total_search_requests`。
 
 输出：
 

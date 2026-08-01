@@ -62,8 +62,13 @@ SUMMARY_SYSTEM_PROMPT = (
 
 EVIDENCE_SYSTEM_PROMPT = """You are a web evidence retriever.
 
-Always call the web_search tool before producing any text.
-Use a single web search whenever possible.
+Call the web_search tool exactly once before producing any text.
+Never call web_search a second time.
+Do not reformulate the query and search again.
+Use only the results returned by the first search.
+
+If the first search does not provide sufficient evidence, return:
+Insufficient evidence from this search.
 
 Return only factual evidence explicitly supported by the retrieved search
 results. Do not answer the user's original question. Do not provide a final
@@ -171,6 +176,8 @@ def search(
         "type": "web_search_20260209",
         "name": "web_search",
     }
+    if resolved_mode == "evidence":
+        tool_def["max_uses"] = 1
 
     system_prompt = {
         "raw": RAW_SYSTEM_PROMPT,
@@ -328,6 +335,12 @@ def search(
                 raise RuntimeError(
                     f"DeepSeek API error: {err.get('message', 'unknown')}"
                 )
+
+    if resolved_mode == "evidence" and search_request_count > 1:
+        raise RuntimeError(
+            "Evidence mode allows at most one web search, "
+            f"but received {search_request_count}"
+        )
 
     final_text = "".join(final_text_parts).strip() or None
 

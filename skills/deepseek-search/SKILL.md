@@ -40,7 +40,8 @@ description: 专为联网搜索而生、而且极其便宜的搜索 Skill。它�
 - 默认使用 Raw：`search(query)`、`summarize=False` 或 `mode="raw"`。需要最终回答时使用 `--summary`、`summarize=True` 或 `mode="summary"`。
 - 需要来源化事实并把关系推理、后续搜索和最终回答留给调用方时，使用 `--evidence` 或 `mode="evidence"`。Evidence 文本写入 `SearchResponse.evidence`，结构化 `results` 继续保留 URL。
 - Summary 和 Evidence 都从搜索后的 `text_delta` 组装最终文本并读取到 `message_stop`，因此能保留最终 usage；Raw 仍在结果后的首个 `text` block 处断流。
-- Evidence 的“一次搜索、独立事实、无最终结论、无跨来源推理、最多 8 条、文本不含 URL”属于 system prompt 约束。用 `total_search_requests` 监控真实搜索轮数，不要声称服务端绝对只搜一次或模型绝不越界。
+- Evidence 通过工具参数 `max_uses=1` 将每次调用硬限制为最多一次 Web Search，prompt 同时要求恰好搜索一次；客户端收到多个 `web_search_tool_result` 时抛出 `RuntimeError`。继续用 `total_search_requests` 记录实际轮数。
+- Evidence 的独立事实、无最终结论、无跨来源推理、最多 8 条、文本不含 URL 仍属于模型语义约束；证据不足时应返回 `Insufficient evidence from this search.`，不要自行补全。
 - CLI 的 `--summary`、`--summarize` 与 `--evidence` 互斥。Python 中 `summarize=True` 与 `mode="raw"` 或 `mode="evidence"` 冲突并抛出 `ValueError`。
 - 修改实现时保持公开 CLI、Python 返回类型和 JSON schema 向后兼容，除非用户明确要求破坏性变更。
 

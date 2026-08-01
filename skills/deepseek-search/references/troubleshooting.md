@@ -66,11 +66,12 @@
 
 按以下顺序检查：
 
-1. 确认使用 CLI `--evidence` 或 Python `mode="evidence"`，并确认版本至少为 `0.3.0`。
+1. 确认使用 CLI `--evidence` 或 Python `mode="evidence"`，并确认版本至少为 `0.3.1`。
 2. `result_count > 0` 但 `evidence is None`：检查搜索结果之后是否存在最终 text block，客户端是否完整消费到 `message_stop`。
-3. `total_search_requests > 1`：这不一定是客户端重复请求；计数来自同一 SSE 流中的 `web_search_tool_result` block。“尽量一次搜索”只是 Evidence prompt 约束。
-4. Evidence 出现 URL、最终答案、实体比较或跨来源推理：先确认请求使用专用 Evidence system prompt，再保存脱敏文本作为回归样本。语义边界依赖模型遵循提示词，不能声称绝对保证。
-5. 确认 URL 仍存在于 `response.results` 或 Evidence JSON 的 `results` 中；不要为了清理 Evidence 文本删除结构化 URL。
+3. `total_search_requests == 0`：客户端允许返回这一异常状态，检查服务端是否执行了强制工具调用；不要伪造搜索结果。
+4. `RuntimeError: Evidence mode allows at most one web search, but received N`：服务端或测试 fixture 违反了 `max_uses=1` 契约。Evidence 不返回多轮结果；Raw 和 Summary 不受此校验影响。
+5. Evidence 出现 URL、最终答案、实体比较或跨来源推理：先确认请求使用专用 Evidence system prompt，再保存脱敏文本作为回归样本。语义边界依赖模型遵循提示词，不能声称绝对保证。
+6. 确认 URL 仍存在于 `response.results` 或 Evidence JSON 的 `results` 中；不要为了清理 Evidence 文本删除结构化 URL。
 
 参数冲突 `summarize=True cannot be combined with mode='raw'/'evidence'` 属于预期校验。删除 `summarize=True`，或改用 `mode="summary"`。
 

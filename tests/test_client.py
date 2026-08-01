@@ -14,6 +14,7 @@ def _sse(event: dict) -> str:
 def _search_events(
     *,
     final_text_parts: tuple[str, ...] = ("A concise ", "summary."),
+    search_count: int = 1,
 ) -> list[str]:
     events = [
         _sse(
@@ -22,40 +23,49 @@ def _search_events(
                 "message": {"usage": {"input_tokens": 9}},
             }
         ),
-        _sse(
-            {
-                "type": "content_block_start",
-                "content_block": {
-                    "type": "server_tool_use",
-                    "input": {"query": "server query"},
-                },
-            }
-        ),
-        _sse({"type": "content_block_stop"}),
-        _sse(
-            {
-                "type": "content_block_start",
-                "content_block": {
-                    "type": "web_search_tool_result",
-                    "content": [
-                        {
-                            "type": "web_search_result",
-                            "title": "Result",
-                            "url": "https://example.com/result",
-                            "page_age": "1 day ago",
-                        }
-                    ],
-                },
-            }
-        ),
-        _sse({"type": "content_block_stop"}),
+    ]
+    for search_index in range(search_count):
+        suffix = "" if search_index == 0 else f" {search_index + 1}"
+        url_suffix = "" if search_index == 0 else str(search_index + 1)
+        events.extend(
+            [
+                _sse(
+                    {
+                        "type": "content_block_start",
+                        "content_block": {
+                            "type": "server_tool_use",
+                            "input": {"query": f"server query{suffix}"},
+                        },
+                    }
+                ),
+                _sse({"type": "content_block_stop"}),
+                _sse(
+                    {
+                        "type": "content_block_start",
+                        "content_block": {
+                            "type": "web_search_tool_result",
+                            "content": [
+                                {
+                                    "type": "web_search_result",
+                                    "title": f"Result{suffix}",
+                                    "url": f"https://example.com/result{url_suffix}",
+                                    "page_age": "1 day ago",
+                                }
+                            ],
+                        },
+                    }
+                ),
+                _sse({"type": "content_block_stop"}),
+            ]
+        )
+    events.append(
         _sse(
             {
                 "type": "content_block_start",
                 "content_block": {"type": "text", "text": ""},
             }
-        ),
-    ]
+        )
+    )
     events.extend(
         _sse(
             {
@@ -163,14 +173,60 @@ class SearchModeTests(unittest.TestCase):
         self.assertEqual(result.summary, "A concise summary.")
         self.assertIsNone(result.evidence)
 
+    def test_raw_mode_tool_definition_has_no_max_uses(self) -> None:
+        _, _, request = self._run_search(mode="raw")
+
+        self.assertEqual(
+            request["body"]["tools"],
+            [
+                {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                }
+            ],
+        )
+        self.assertEqual(request["body"]["tool_choice"], {"type": "any"})
+
+    def test_summary_mode_tool_definition_has_no_max_uses(self) -> None:
+        _, _, request = self._run_search(mode="summary")
+
+        self.assertEqual(
+            request["body"]["tools"],
+            [
+                {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                }
+            ],
+        )
+        self.assertEqual(request["body"]["tool_choice"], {"type": "any"})
+
+    def test_evidence_mode_tool_definition_limits_searches(self) -> None:
+        _, _, request = self._run_search(mode="evidence")
+
+        self.assertEqual(
+            request["body"]["tools"],
+            [
+                {
+                    "type": "web_search_20260209",
+                    "name": "web_search",
+                    "max_uses": 1,
+                }
+            ],
+        )
+        self.assertEqual(request["body"]["tool_choice"], {"type": "any"})
+
     def test_evidence_mode_uses_dedicated_system_prompt(self) -> None:
         _, _, request = self._run_search(mode="evidence")
 
         prompt = request["body"]["system"].lower()
         for requirement in (
             "web evidence retriever",
-            "always call the web_search tool",
-            "single web search",
+            "call the web_search tool exactly once",
+            "never call web_search a second time",
+            "do not reformulate the query and search again",
+            "use only the results returned by the first search",
+            "insufficient evidence from this search",
             "only factual evidence",
             "do not answer the user's original question",
             "do not compare entities",
@@ -187,6 +243,44 @@ class SearchModeTests(unittest.TestCase):
             '"in conclusion"',
         ):
             self.assertIn(requirement, prompt)
+        self.assertNotIn("whenever possible", prompt)
+
+    def test_evidence_mode_allows_one_search(self) -> None:
+        result, _, _ = self._run_search(mode="evidence")
+
+        self.assertEqual(result.total_search_requests, 1)
+        self.assertIsNotNone(result.evidence)
+
+    def test_evidence_mode_allows_zero_searches(self) -> None:
+        events = _search_events(search_count=0)
+
+        result, _, _ = self._run_search(events=events, mode="evidence")
+
+        self.assertEqual(result.total_search_requests, 0)
+        self.assertIsNone(result.evidence)
+
+    def test_evidence_mode_rejects_multiple_searches(self) -> None:
+        events = _search_events(search_count=2)
+
+        with self.assertRaisesRegex(
+            RuntimeError,
+            "Evidence mode allows at most one web search, but received 2",
+        ):
+            self._run_search(events=events, mode="evidence")
+
+    def test_raw_and_summary_modes_still_allow_multiple_searches(self) -> None:
+        events = _search_events(search_count=2)
+        raw, _, _ = self._run_search(events=events, mode="raw")
+        summary, _, _ = self._run_search(events=events, mode="summary")
+
+        self.assertEqual(raw.total_search_requests, 2)
+        self.assertEqual(raw.result_count, 2)
+        self.assertIsNone(raw.summary)
+        self.assertIsNone(raw.evidence)
+        self.assertEqual(summary.total_search_requests, 2)
+        self.assertEqual(summary.result_count, 2)
+        self.assertEqual(summary.summary, "A concise summary.")
+        self.assertIsNone(summary.evidence)
 
     def test_evidence_mode_concatenates_all_text_deltas(self) -> None:
         expected = (

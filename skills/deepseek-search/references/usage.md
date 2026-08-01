@@ -71,7 +71,7 @@ deepseek-search --evidence "The Ages of Lulu director"
 deepseek-search --evidence --json "The Ages of Lulu director"
 ```
 
-Evidence 文本最多包含 8 条带来源标题的独立事实，要求不回答原问题、不跨来源推理、不输出 URL。普通文本输出只显示 Evidence；JSON 同时保留 `results` 中的 URL、`total_search_requests`、最终 `usage` 和 `evidence`。`--summary`、`--summarize` 与 `--evidence` 互斥。
+Evidence 模式通过 `max_uses=1` 将每次调用限制为最多一次 Web Search，并在客户端拒绝多个搜索结果块。Evidence 文本最多包含 8 条带来源标题的独立事实，要求不回答原问题、不跨来源推理、不输出 URL；首轮证据不足时返回 `Insufficient evidence from this search.`。普通文本输出只显示 Evidence；JSON 同时保留 `results` 中的 URL、`total_search_requests`、最终 `usage` 和 `evidence`。`--summary`、`--summarize` 与 `--evidence` 互斥。
 
 常用覆盖参数：
 
@@ -171,7 +171,7 @@ for item in response.results:
     print(item.title, item.url)
 ```
 
-Summary 和 Evidence 都会继续读取到响应结束并获得更完整的 output token 统计；Raw 保持原来的提前断流行为。Evidence 的语义约束由专用 system prompt 实现，调用方仍应监控搜索次数并按需要验证证据质量。
+Summary 和 Evidence 都会继续读取到响应结束并获得更完整的 output token 统计；Raw 保持原来的提前断流行为。Evidence 的搜索次数同时受 `max_uses=1` 和客户端计数校验约束，其他语义边界由专用 system prompt 实现；调用方仍应按需要验证证据质量。
 
 ## 错误处理
 
